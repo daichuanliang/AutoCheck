@@ -47,16 +47,131 @@ typedef struct ipMacInfo{
     int sockfd;
 }_ipMacInfo;
 
+typedef struct adClientMacInfo{
+    char mac[20];
+    int sockfd;
+}_AdClientInfo;
+
 struct productInfo product[NUM_OF_SENSORS];
 struct ipMacInfo ipMac[NUM_OF_CLIENTS];
+struct adClientMacInfo adClient[NUM_OF_CLIENTS];
 
 char* cutStringSaveinArray(char* f_dest,char* f_source,const char* f_start,const char* f_end,int f_destbuff_len);
 void sensorData(int fd, char *recvData);
 void ADData(int fd, char *recvData);
-static void *funThrRecvHandler(void *sock_fd);
+static void *funThrWeightRecvHandler(void *sock_fd);
 void resetProductStatus(int fd);
 
-int main(int argc, char *argv[])
+
+static void *thrAdServer(void *);
+static void *thrWeightServer(void *);
+void send2AdClient(char *adMac, int adId);
+static void *funThrAdRecvHandler(void *sock_fd);
+int resetAdFd(int fd);
+void saveMac(int fd, char *recvData);
+void saveFd(int fd, char *recv_data);
+
+int main(int argc ,char *argv[])
+{
+
+    google::InitGoogleLogging(argv[0]);
+
+    pthread_t thrWeightId, thrAdId;
+    if(pthread_create(&thrWeightId, NULL, thrWeightServer, NULL) == -1)
+    {
+        LOG(ERROR) << "thrWeight_create error!";
+    } 
+    if(pthread_create(&thrAdId, NULL, thrAdServer, NULL) == -1 )
+    {
+        LOG(ERROR) << "thrAdServer_create error!";
+    } 
+    while(1)
+    {
+    }
+
+}
+
+
+static void *thrAdServer(void *)
+{
+    int sockfd_server;
+    int sockfd;
+    struct sockaddr_in s_addr_in;
+    struct sockaddr_in s_addr_client;
+    int client_length;
+
+    LOG(INFO) << "Start AD server...";
+
+    sockfd_server = socket(AF_INET, SOCK_STREAM, 0);
+    if(sockfd_server == -1)
+    {
+        LOG(ERROR) << "socket error!";
+        return NULL;
+    }
+
+    //before bind(),set the attr of structure sockaddr.
+    memset(&s_addr_in, 0, sizeof(s_addr_in));
+    s_addr_in.sin_family = AF_INET;
+    s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
+    s_addr_in.sin_port = htons(AD_CLIENT_PORT);
+
+
+    //before bind(),set the attr of structure sockaddr.
+    memset(&s_addr_in, 0, sizeof(s_addr_in));
+    s_addr_in.sin_family = AF_INET;
+    s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
+    s_addr_in.sin_port = htons(WEIGHT_PORT);
+
+    LOG(INFO) << "bind...";
+    int fd_temp = bind(sockfd_server, (struct sockaddr*)(&s_addr_in), sizeof(s_addr_in));
+    if(fd_temp == -1)
+    {
+        LOG(ERROR) << "bind error!";
+        return NULL;
+    }
+
+    LOG(INFO) << "listen...";
+    if(listen(sockfd_server, MAX_CONN_LIMIT) == -1)
+    {
+        LOG(ERROR) << "listen error!";
+        return NULL;
+    }
+
+    while(1){
+        LOG(INFO) << "waiting for new connection...";
+        printf("waiting for new connection...\n");
+        pthread_t thread_id;
+        client_length = sizeof(s_addr_client);
+
+        //Block here, until server accept a new connection
+        sockfd = accept(sockfd_server, (struct sockaddr*)(&s_addr_client), (socklen_t *)(&client_length));
+        if(sockfd == -1)
+        {
+            LOG(ERROR) << "Accept error!";
+            continue;
+        }
+
+        LOG(INFO) << "A new connection occurs...";
+        
+        printf("A new connection occurs...\n");
+        if(pthread_create(&thread_id, NULL, funThrAdRecvHandler, (void*)(&sockfd)) == -1)
+        {
+            LOG(ERROR) << "pthread_create error!";
+            break;
+        } 
+
+    }
+    //Clear
+    int ret = shutdown(sockfd_server, SHUT_WR);
+    assert(ret != -1);
+
+    LOG(INFO) << "Ad Server shutdown!";
+    return NULL;
+
+}
+
+
+static void *thrWeightServer(void *)
 {
     int sockfd_server;
     int sockfd;
@@ -65,14 +180,13 @@ int main(int argc, char *argv[])
     struct sockaddr_in s_addr_client;
     int client_length;
     
-    google::InitGoogleLogging(argv[0]);
     //google::ParseCommandLineFlags(&argc, &argv, true);
-    LOG(INFO) << "Start server...";
+    LOG(INFO) << "Start Weight server...";
     sockfd_server = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd_server == -1)
     {
-        LOG(ERROR) << "sokcet error!";
-        return -1;
+        LOG(ERROR) << "socket error!";
+        return NULL;
     }
 
     //before bind(),set the attr of structure sockaddr.
@@ -86,14 +200,14 @@ int main(int argc, char *argv[])
     if(fd_temp == -1)
     {
         LOG(ERROR) << "bind error!";
-        return -1;
+        return NULL;
     }
 
     LOG(INFO) << "listen...";
     if(listen(sockfd_server, MAX_CONN_LIMIT) == -1)
     {
         LOG(ERROR) << "listen error!";
-        return -1;
+        return NULL;
     }
 
     while(1)
@@ -114,7 +228,7 @@ int main(int argc, char *argv[])
         LOG(INFO) << "A new connection occurs...";
         
         printf("A new connection occurs...\n");
-        if(pthread_create(&thread_id, NULL, funThrRecvHandler, (void*)(&sockfd)) == -1)
+        if(pthread_create(&thread_id, NULL, funThrWeightRecvHandler, (void*)(&sockfd)) == -1)
         {
             LOG(ERROR) << "pthread_create error!";
             break;
@@ -126,13 +240,112 @@ int main(int argc, char *argv[])
     int ret = shutdown(sockfd_server, SHUT_WR);
     assert(ret != -1);
 
-    //LOG(INFO) << "Server shutdown!";
-    return 0;
+    LOG(INFO) << "Weight Server shutdown!";
+    return NULL;
 }
 
 
+void send2AdClient(char *adMac, int adId)
+{
+    LOG(INFO) << "send data to AD Client...";
+    for(int i=0; i<NUM_OF_CLIENTS; i++)
+    {
+        if(strcmp(adClient[i].mac, adMac) == 0)
+        {
+            if((send(adClient[i].sockfd, &adId, sizeof(adId), 0)) < 0)
+            {
+                LOG(ERROR) << "send adId error..";
+            }
+            break;
+        }
+    }
+    
+}
 
-static void *funThrRecvHandler(void *sock_fd)
+static void *funThrAdRecvHandler(void *sock_fd)
+{
+    int fd = *((int *)sock_fd);
+    int i_recvBytes;
+    char data_recv[BUFFER_LENGTH];
+
+    while(1){
+        LOG(INFO) << "recv AD client data...";
+        memset(data_recv, 0, BUFFER_LENGTH);
+
+        i_recvBytes = recv(fd, data_recv, BUFFER_LENGTH, 0);
+        printf("recv data:%s\n", data_recv);
+        if(i_recvBytes == 0)
+        {
+            LOG(INFO) << "Client has closed!";
+            printf("client has closed\n");
+            break;
+        }
+        else if(i_recvBytes == -1)
+        {
+            LOG(ERROR) << "recv error";
+            break;
+        }
+        //data from AD client
+        if(strstr(data_recv, "register") != NULL)
+        {
+            saveFd(fd, data_recv);
+        }
+        if(strstr(data_recv, "mac") != NULL)
+        {
+            saveMac(fd, data_recv);
+        }
+        
+    }    
+    //Clear
+    LOG(INFO) << "terminating current AD client_connection...";
+    printf("terminating current AD client_connection...\n");
+    resetAdFd(fd);
+    pthread_exit(NULL);
+}
+
+int resetAdFd(int fd)
+{
+    for(int i=0; i<NUM_OF_CLIENTS; i++)
+    {
+        if(adClient[i].sockfd == fd)
+        {
+            adClient[i].sockfd = 0;
+            memset(adClient[i].mac, 0, sizeof(adClient[i].mac));
+            break;
+        }
+    }
+    close(fd);
+}
+
+void saveMac(int fd, char *recvData)
+{
+    char mac[20];
+    memset(mac, 0 ,sizeof(mac));
+    cutStringSaveinArray(mac, recvData, "mac:", "\0", 20);
+    for(int i=0; i<NUM_OF_CLIENTS; i++)
+    {
+        if(adClient[i].sockfd == fd)
+        {
+            strcpy(adClient[i].mac, mac);
+            break;
+        }
+    }
+}
+
+void saveFd(int fd, char *recv_data)
+{
+    for(int i=0; i<NUM_OF_CLIENTS; i++)
+    {
+        if(adClient[i].sockfd == 0)
+        {
+            adClient[i].sockfd = fd;
+            break;
+        }
+    }
+}
+
+
+static void *funThrWeightRecvHandler(void *sock_fd)
 {
     int fd = *((int *)sock_fd);
     int i_recvBytes;
@@ -162,18 +375,18 @@ static void *funThrRecvHandler(void *sock_fd)
             break;    
         }
 
-        i_recvBytes = read(fd, data_recv, BUFFER_LENGTH);
+        i_recvBytes = recv(fd, data_recv, BUFFER_LENGTH, 0);
         printf("recv data:%s\n", data_recv);
         if(i_recvBytes == 0)
         {
-            LOG(INFO) << "Clinet has closed!";
+            LOG(INFO) << "Client has closed!";
             printf("client has closed\n");
             resetProductStatus(fd);
             break;
         }
         else if(i_recvBytes == -1)
         {
-            LOG(ERROR) << "read error";
+            LOG(ERROR) << "recv error";
             resetProductStatus(fd);
             break;
         }
@@ -182,11 +395,6 @@ static void *funThrRecvHandler(void *sock_fd)
         if(strstr(data_recv, "id:") !=NULL)
         {
             sensorData(fd, data_recv);
-        }
-        //data from AD client
-        if(strstr(data_recv, "Register") != NULL)
-        {
-            ADData(fd, data_recv);
         }
         
 
@@ -208,16 +416,13 @@ void resetProductStatus(int fd)
         if(product[i].sockfd == fd)
         {
             product[i].isView = 0;
+            //TODO: sockfd = 0 ?
             break;
         }
     }
 
 }
 
-void ADData(int fd, char *recvData) 
-{
-    LOG(INFO) << "AD client connect...";
-}
 
 void sensorData(int fd, char *recvData) 
 {
@@ -279,6 +484,13 @@ void sensorData(int fd, char *recvData)
                 product[j].sockfd = fd;
                 printf("view count:%d\n", product[j].count);
                 //TODO:update MySQL, send AD ID to AD client.
+#if 1
+                char mac[20];
+                memset(mac, 0, sizeof(mac));
+                strcpy(mac, "aa:bb:cc:dd:ee:ff");
+                int adId = 35;
+#endif
+                send2AdClient(mac, adId);
 
             }
         }   
@@ -318,8 +530,6 @@ void sensorData(int fd, char *recvData)
 
 
 }
-
-
 
 
 char* cutStringSaveinArray(char* f_dest,char* f_source, const char* f_start,const char* f_end, int f_destbuff_len)
@@ -401,3 +611,4 @@ int _System(const char * cmd, char *pRetMsg, int msg_len)
 		return 0;
 	}
 }
+
