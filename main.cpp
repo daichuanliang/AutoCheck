@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <glog/logging.h>
+#include "sql.h"
 
 #define WEIGHT_PORT 7112
 #define AD_CLIENT_PORT 8113
@@ -77,10 +78,13 @@ int main(int argc ,char *argv[])
     google::InitGoogleLogging(argv[0]);
 
     pthread_t thrWeightId, thrAdId;
+
+#if 1
     if(pthread_create(&thrWeightId, NULL, thrWeightServer, NULL) == -1)
     {
         LOG(ERROR) << "thrWeight_create error!";
     } 
+#endif
     if(pthread_create(&thrAdId, NULL, thrAdServer, NULL) == -1 )
     {
         LOG(ERROR) << "thrAdServer_create error!";
@@ -114,13 +118,6 @@ static void *thrAdServer(void *)
     s_addr_in.sin_family = AF_INET;
     s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
     s_addr_in.sin_port = htons(AD_CLIENT_PORT);
-
-
-    //before bind(),set the attr of structure sockaddr.
-    memset(&s_addr_in, 0, sizeof(s_addr_in));
-    s_addr_in.sin_family = AF_INET;
-    s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
-    s_addr_in.sin_port = htons(WEIGHT_PORT);
 
     LOG(INFO) << "bind...";
     int fd_temp = bind(sockfd_server, (struct sockaddr*)(&s_addr_in), sizeof(s_addr_in));
@@ -439,14 +436,19 @@ void sensorData(int fd, char *recvData)
 
     int sensor_id = atoi(tmp_id);
     int weights = atoi(tmp_weights);
+    //connect Database
+    MYSQL *conn;
+    connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
 
     //TODO: read data from MySQL
+    char *sql = "select ad_id, mac from products";
+    queryDatabase(conn, sql); 
 
     //products table: ad_id,ad_mac
 
     //layers table: sensor_id, product_id, quantity, weight, avg_weight, 
 
-#if 1    
+#if 0    
     int j=0;
     for(j=0; j<NUM_OF_SENSORS; j++)
     {
