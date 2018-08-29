@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -9,6 +8,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <glog/logging.h>
+#include <stdlib.h>
+#include <iostream>
 #include "sql.h"
 
 #define WEIGHT_PORT 7112
@@ -20,6 +21,7 @@
 #define NUM_OF_CLIENTS 512
 
 #define TIMEOUT_TIME 20
+using namespace std;
 
 typedef struct MysocketInfo{
     int socketCon;
@@ -78,6 +80,7 @@ int main(int argc ,char *argv[])
     google::InitGoogleLogging(argv[0]);
 
     pthread_t thrWeightId, thrAdId;
+    //connect Database
 
 #if 1
     if(pthread_create(&thrWeightId, NULL, thrWeightServer, NULL) == -1)
@@ -119,6 +122,8 @@ static void *thrAdServer(void *)
     s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
     s_addr_in.sin_port = htons(AD_CLIENT_PORT);
 
+    int opt = 1;
+    setsockopt( sockfd_server, SOL_SOCKET,SO_REUSEADDR, (const void *)&opt, sizeof(opt) );
     LOG(INFO) << "bind...";
     int fd_temp = bind(sockfd_server, (struct sockaddr*)(&s_addr_in), sizeof(s_addr_in));
     if(fd_temp == -1)
@@ -191,7 +196,9 @@ static void *thrWeightServer(void *)
     s_addr_in.sin_family = AF_INET;
     s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
     s_addr_in.sin_port = htons(WEIGHT_PORT);
-
+    
+    int opt = 1;
+    setsockopt( sockfd_server, SOL_SOCKET,SO_REUSEADDR, (const void *)&opt, sizeof(opt) );
     LOG(INFO) << "bind...";
     int fd_temp = bind(sockfd_server, (struct sockaddr*)(&s_addr_in), sizeof(s_addr_in));
     if(fd_temp == -1)
@@ -435,19 +442,36 @@ void sensorData(int fd, char *recvData)
     printf("weight: %s\n", tmp_weights);
 
     int sensor_id = atoi(tmp_id);
-    int weights = atoi(tmp_weights);
-    //connect Database
-    MYSQL *conn;
-    connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
-
+    float weights = atof(tmp_weights);
+    printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
     //TODO: read data from MySQL
-    char *sql = "select ad_id, mac from products";
-    queryDatabase(conn, sql); 
 
+    MYSQL *conn;
+    cout << "cldai test 1" << endl;
+    connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
+    cout << "cldai test 2" << endl;
     //products table: ad_id,ad_mac
 
     //layers table: sensor_id, product_id, quantity, weight, avg_weight, 
+    const char *sql = "select ad_id,mac,sensor_id,product_id,quantity,weight,ave_weight from layers,products where layers.product_id = products.id;";
+    queryDatabase(conn, sql); 
+    MYSQL_RES *result = mysql_store_result(conn);
+    if(result = NULL)
+    {
+        finishWithError(conn);
+    }
+    int num_fields = mysql_num_fields(result);
+    MYSQL_ROW row;
 
+    while ((row = mysql_fetch_row(result)))
+    {
+        for(int i = 0; i < num_fields; i++)
+        {
+            //TODO: 赋值
+            printf("%s ", row[i] ? row[i] : "NULL");
+        }
+        printf("\n");
+    }
 #if 0    
     int j=0;
     for(j=0; j<NUM_OF_SENSORS; j++)
@@ -529,6 +553,7 @@ void sensorData(int fd, char *recvData)
 
 
 #endif    
+	mysql_close(conn);
 
 
 }

@@ -1,8 +1,8 @@
 #include "sql.h" 
  
 void connectDatabase(MYSQL *conn, const char* host, const char* user, const char* password, const char* database) {
+    printf("cldai test sql 1\n"); 
 	mysql_init(conn);
- 
 	if (mysql_real_connect(conn, host, user, password, database, 0, NULL, 0)) {
 		printf("Connection success!\n");
 	} else {
@@ -15,7 +15,7 @@ void connectDatabase(MYSQL *conn, const char* host, const char* user, const char
 }
  
 
-void insertDatabase(MYSQL *conn, char *sql) {
+void insertDatabase(MYSQL *conn, const char *sql) {
 	int res = mysql_query(conn, sql);
 	if (!res) {
 		printf("Inserted %lu rows\n", (unsigned long)mysql_affected_rows(conn));
@@ -24,7 +24,7 @@ void insertDatabase(MYSQL *conn, char *sql) {
 	}
 }
  
-void updateDatabase(MYSQL *conn, char *sql) {
+void updateDatabase(MYSQL *conn, const char *sql) {
 	int res = mysql_query(conn, sql);
 	if (!res) {
 		printf("Update %lu rows\n", (unsigned long)mysql_affected_rows(conn));
@@ -33,7 +33,7 @@ void updateDatabase(MYSQL *conn, char *sql) {
 	}
 }
  
-void deleteDatabase(MYSQL *conn, char*sql) {
+void deleteDatabase(MYSQL *conn, const char *sql) {
 	int res = mysql_query(conn, sql);
 	if (!res) {
 		printf("Delete %lu rows\n", (unsigned long)mysql_affected_rows(conn));
@@ -49,7 +49,7 @@ void finishWithError(MYSQL *conn)
     exit(1);
 }
 
-void queryDatabase(MYSQL *conn, char *sql)
+void queryDatabase(MYSQL *conn, const char *sql)
 {
     if (mysql_query(conn, sql))
     {
@@ -57,11 +57,12 @@ void queryDatabase(MYSQL *conn, char *sql)
     }
 }
 
+#if 0
 int main (int argc, char *argv[]) {
  
     MYSQL *conn;
 	connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
-    char *sql = "select ad_id, mac from products";
+    const char *sql = "select ad_id, mac from products";
 
     queryDatabase(conn, sql);
     //store result
@@ -92,3 +93,4 @@ int main (int argc, char *argv[]) {
 
 	exit(EXIT_SUCCESS);
 }
+#endif
