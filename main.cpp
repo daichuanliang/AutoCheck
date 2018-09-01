@@ -19,8 +19,9 @@
 
 #define NUM_OF_SENSORS 1024
 #define NUM_OF_CLIENTS 512
+#define SQLLEN 256
 
-#define TIMEOUT_TIME 20
+#define TIMEOUT_TIME 2000
 using namespace std;
 
 typedef struct MysocketInfo{
@@ -30,16 +31,29 @@ typedef struct MysocketInfo{
 }_MySocketInfo;
 
 
+typedef struct dataBaseProductInfo{
+    int sensorId; //sensor id
+    float weights; //sensor weights
+    int quantity; //goods quantity
+    int adId; // AD  id
+    float aveWeight;
+    char mac[20];
+}_dataBaseProductInfo;
+
 typedef struct productInfo{
     int sockfd;
     int id; //sensor id
-    int weights; //sensor weights
+    float weights; //sensor weights
     int isView; // 1-->View
     int count; // numeber of views
     int isInit;
     int loop; // if loop>100, goods lost
     int lost;
-    float goodsErr; //weight error
+    int quantity; //goods quantity
+    int adId; // AD  id
+    float aveWeight;
+    char mac[20]; //TODO: Change 1 mac to Multiple macs.
+    float goodsErr; //weight error range
 
 }_productInfo;
 
@@ -56,6 +70,7 @@ typedef struct adClientMacInfo{
 }_AdClientInfo;
 
 struct productInfo product[NUM_OF_SENSORS];
+struct dataBaseProductInfo dataBaseProduct[NUM_OF_SENSORS];
 struct ipMacInfo ipMac[NUM_OF_CLIENTS];
 struct adClientMacInfo adClient[NUM_OF_CLIENTS];
 
@@ -73,6 +88,7 @@ static void *funThrAdRecvHandler(void *sock_fd);
 int resetAdFd(int fd);
 void saveMac(int fd, char *recvData);
 void saveFd(int fd, char *recv_data);
+int readDataFromMySQL(MYSQL *conn);
 
 int main(int argc ,char *argv[])
 {
@@ -80,7 +96,12 @@ int main(int argc ,char *argv[])
     google::InitGoogleLogging(argv[0]);
 
     pthread_t thrWeightId, thrAdId;
-    //connect Database
+    //open MySQL
+
+    MYSQL *conn;
+    conn = mysql_init(NULL);
+    connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
+    readDataFromMySQL(conn);
 
 #if 1
     if(pthread_create(&thrWeightId, NULL, thrWeightServer, NULL) == -1)
@@ -252,11 +273,15 @@ static void *thrWeightServer(void *)
 void send2AdClient(char *adMac, int adId)
 {
     LOG(INFO) << "send data to AD Client...";
+    char tmp_id[20];
+    memset(tmp_id, 0, sizeof(tmp_id));
+    sprintf(tmp_id, "%d", adId); 
+    cout << "send AD ID:" << tmp_id << "to Ad Client..." <<endl;
     for(int i=0; i<NUM_OF_CLIENTS; i++)
     {
         if(strcmp(adClient[i].mac, adMac) == 0)
         {
-            if((send(adClient[i].sockfd, &adId, sizeof(adId), 0)) < 0)
+            if((send(adClient[i].sockfd, tmp_id, strlen(tmp_id), 0)) < 0)
             {
                 LOG(ERROR) << "send adId error..";
             }
@@ -298,6 +323,17 @@ static void *funThrAdRecvHandler(void *sock_fd)
         {
             saveMac(fd, data_recv);
         }
+        //data from web
+#if 0
+        if(strstr(data_recv, "initAll") != NULL)
+        {
+            initAll(data_recv);
+        }
+        else if(strstr(data_recv, "initOneData") != NULL)
+        {
+            initOneData(data_recv);
+        }
+#endif        
         
     }    
     //Clear
@@ -338,6 +374,7 @@ void saveMac(int fd, char *recvData)
 
 void saveFd(int fd, char *recv_data)
 {
+    cout << "AD Clinet register" <<endl;
     for(int i=0; i<NUM_OF_CLIENTS; i++)
     {
         if(adClient[i].sockfd == 0)
@@ -444,19 +481,20 @@ void sensorData(int fd, char *recvData)
     int sensor_id = atoi(tmp_id);
     float weights = atof(tmp_weights);
     printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
-    //TODO: read data from MySQL
-
+    //read data from MySQL
+    //connect Database
     MYSQL *conn;
-    cout << "cldai test 1" << endl;
+    conn = mysql_init(NULL);
     connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
-    cout << "cldai test 2" << endl;
+#if 0
     //products table: ad_id,ad_mac
 
     //layers table: sensor_id, product_id, quantity, weight, avg_weight, 
     const char *sql = "select ad_id,mac,sensor_id,product_id,quantity,weight,ave_weight from layers,products where layers.product_id = products.id;";
+    //const char *sql = "select * from products";
     queryDatabase(conn, sql); 
     MYSQL_RES *result = mysql_store_result(conn);
-    if(result = NULL)
+    if(result == NULL)
     {
         finishWithError(conn);
     }
@@ -472,7 +510,9 @@ void sensorData(int fd, char *recvData)
         }
         printf("\n");
     }
-#if 0    
+#endif
+
+#if 1    
     int j=0;
     for(j=0; j<NUM_OF_SENSORS; j++)
     {
@@ -481,16 +521,17 @@ void sensorData(int fd, char *recvData)
             break;
         }
     }
-    printf("j=%d\n", j);
+    cout << "j:" << j <<endl;
     if(j >= NUM_OF_SENSORS)
     {
         //Initialize the product
+        cout << "Initialize the product" << endl;
         for(int i=0; i<NUM_OF_SENSORS; i++)
         {
-            if(product[i].isInit == 0)
+            if(product[i].isInit == 0 && product[i].id == sensor_id)
             {
                 product[i].sockfd = fd;
-                product[i].id = sensor_id;
+                //product[i].id = sensor_id;
                 product[i].weights = weights;            
                 product[i].isView = 0;
                 product[i].count = 0;
@@ -503,26 +544,33 @@ void sensorData(int fd, char *recvData)
     {
         if(product[j].isView == 0)
         {
-            if(weights < 0)
+            //在误差范围内
+            cout << "ready to send data to AD Client..." << endl;
+            cout << "weights:" << weights << "   abs(weights):" << abs(weights) << "    goodsErr: " << product[j].goodsErr <<endl;
+            if((weights < 0) && (abs(weights) > product[j].goodsErr))
             {
                 product[j].isView = 1;
                 product[j].count += 1;
                 product[j].sockfd = fd;
                 printf("view count:%d\n", product[j].count);
-                //TODO:update MySQL, send AD ID to AD client.
+                //update MySQL, send AD ID to AD client.
+                //string sql = "update products set view_count=" + product[j].count + "where id in(select product_id from layers where sensor_id=" + product[j].id + ")";
+                //const char *sql = "update products set view_count=3 where id in(select product_id from layers where sensor_id=101)"
+                char sql[SQLLEN];
+                memset(sql, 0, sizeof(sql));
+                sprintf(sql, "update products set view_count=%d where id in(select product_id from layers where sensor_id=%d)", product[j].count, product[j].id);
+                updateDatabase(conn, sql);
+                                
 #if 1
-                char mac[20];
-                memset(mac, 0, sizeof(mac));
-                strcpy(mac, "aa:bb:cc:dd:ee:ff");
-                int adId = 35;
+                cout << "AD ID:"<< product[j].adId <<"mac:" << product[j].mac << endl;
 #endif
-                send2AdClient(mac, adId);
+                send2AdClient(product[j].mac, product[j].adId);
 
             }
         }   
         else
         {
-            if(weights < 0)
+            if((weights < 0) && (abs(weights) > product[j].goodsErr))
             {
                 //商品长时间未放置回原处
                 product[j].loop += 1;
@@ -537,16 +585,25 @@ void sensorData(int fd, char *recvData)
     {
         printf("warning: the goods lost!!!");
         product[j].lost = 1;
-        //TODO:update MySQL
+        //update MySQL
+        char sql[SQLLEN];
+        memset(sql, 0, sizeof(sql));
+        sprintf(sql, "update products set is_lost=1 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
+        updateDatabase(conn, sql);                                
+
     }
 
 
     //补货后，重置丢失状态
-    if((weights > 0) && (product[j].loop > 100))
+    if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].loop > 100))
     {
         product[j].lost = 0;
         product[j].loop = 0;
-        //TODO:updata MySQL
+        //updata MySQL
+        char sql[SQLLEN];
+        memset(sql, 0, sizeof(sql));
+        sprintf(sql, "update products set is_lost=0 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
+        updateDatabase(conn, sql);                                
 
     }
 
@@ -558,6 +615,93 @@ void sensorData(int fd, char *recvData)
 
 }
 
+
+int readDataFromMySQL(MYSQL *conn)
+{
+
+    char sql[SQLLEN];
+    memset(sql, 0, sizeof(sql));
+    sprintf(sql, "select ad_id,mac,sensor_id,quantity,weight,ave_weight,product_id from layers,products where layers.product_id = products.id");
+    queryDatabase(conn, sql); 
+    MYSQL_RES *result = mysql_store_result(conn);
+    if(result == NULL)
+    {
+        finishWithError(conn);
+        return -1;
+    }
+    int num_fields = mysql_num_fields(result);
+    MYSQL_ROW row;
+    int i=0;
+    while ((row = mysql_fetch_row(result)))
+    {
+        //TODO: 赋值
+        product[i].adId = atoi(row[0]);
+        memset(product[i].mac, 0, sizeof(product[i].mac));
+        strcpy(product[i].mac, row[1]);
+        product[i].id = atoi(row[2]);
+        product[i].quantity = atoi(row[3]);
+        product[i].weights = atof(row[4]);
+        product[i].aveWeight = atof(row[5]);
+        product[i].goodsErr = product[i].aveWeight/3;
+        //product[i].productId = atoi(row[])
+        cout << "aveWeight:" << product[i].aveWeight <<endl;
+        cout << "goodsErr:" << product[i].goodsErr <<endl;
+        i++;            
+    }
+    mysql_close(conn);
+    return 0;
+
+}
+
+#if 0
+int initOneData(char *recvData)
+{
+
+    //init data
+    char tmp_id[20];
+    memset(tmp_id, 0, sizeof(tmp_id));
+    cutStringSaveinArray(tmp_id, recvData, "sensorId:", "\0", 20);
+    int id = atoi(tmp_id);
+
+    for(int i=0; i<NUM_OF_SENSORS; i++)
+    {
+        if(id == product[i].id)
+        {
+            break;
+        }
+    }
+
+    //read data from MYSQL 
+    char sql[SQLLEN];
+    memset(sql, 0, sizeof(sql));
+    sprintf(sql, "select ad_id,mac,sensor_id,product_id,quantity,weight,ave_weight from layers,products where layers.product_id = products.id and layer.sensor_id=%d", id);
+    //const char *sql = "select * from products";
+    queryDatabase(conn, sql); 
+    MYSQL_RES *result = mysql_store_result(conn);
+    if(result == NULL)
+    {
+        finishWithError(conn);
+    }
+    int num_fields = mysql_num_fields(result);
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result)))
+    {
+        //TODO: 赋值
+        product[i].adId = atoi(row[0]);
+        memset(product[i].mac, 0, 20);
+        strcpy(product[i].mac, row[1]);
+        //product[i].id = atoi(row[2]);
+        product[i].quantity = atoi(row[3]);
+            
+    }
+
+    //update MySQL: weight, ave_weight
+    sprintf(sql, "update layers set weight=%f ave_weight=%f where sensor_id=%d", product[i].weight, product[i].weight/product[i].quantitay, product[i].id);
+    updateDatabase(conn, sql); 
+    return 0; 
+
+}
+#endif
 
 char* cutStringSaveinArray(char* f_dest,char* f_source, const char* f_start,const char* f_end, int f_destbuff_len)
 {
@@ -621,7 +765,7 @@ int _System(const char * cmd, char *pRetMsg, int msg_len)
             memset(mac, 0, sizeof(mac));
             cutStringSaveinArray(ip, pRetMsg, "IP:[", "]", 20);
             cutStringSaveinArray(mac, pRetMsg, "MAC:[", "]", 20);
-            //TODO: write to strcut ipMACInfo
+            //write to strcut ipMACInfo
             memset(ipMac[i].ip, 0, 20);
             memset(ipMac[i].mac, 0, 20);
             strcpy(ipMac[i].ip, ip);
