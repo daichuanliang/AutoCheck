@@ -1,0 +1,339 @@
+From 4fb50a2315a39742a78cf351aaf2324c34a79070 Mon Sep 17 00:00:00 2001
+From: TonyTeng <ylteng@outlook.com>
+Date: Wed, 18 Jul 2018 16:37:25 +0800
+Subject: [PATCH] add the weight sensor support
+
+Signed-off-by: TonyTeng <ylteng@outlook.com>
+---
+ server.cpp       |   2 +-
+ weightServer.cpp | 285 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ weightServer.h   |  12 +++
+ 3 files changed, 298 insertions(+), 1 deletion(-)
+ create mode 100644 weightServer.cpp
+ create mode 100644 weightServer.h
+
+diff --git a/server.cpp b/server.cpp
+index b948aff..6189e40 100644
+--- a/server.cpp
++++ b/server.cpp
+@@ -147,7 +147,7 @@ int startServer() {
+ 	}
+ 	else{
+         perror("start server error");
+-		cout << "fail to start server" << endl;
++		cout << "fail to bigdata start server" << endl;
+ 	}
+ 
+     //in most case, will not enter.
+diff --git a/weightServer.cpp b/weightServer.cpp
+new file mode 100644
+index 0000000..86380ee
+--- /dev/null
++++ b/weightServer.cpp
+@@ -0,0 +1,285 @@
++#include <unistd.h>
++#include <iostream>
++#include <vector>
++#include <chrono>
++#include <iostream>
++#include <algorithm>
++#include <thread>
++#include <string>
++#include <mutex>
++
++#include "Tools.h"
++#include "lib/SocketClient.h"
++#include "lib/SocketServer.h"
++
++using namespace std;
++float DEFAULT_W = 251;
++int GOODS_COUNT = 2;
++float  GOODS_HALF = ((DEFAULT_W/GOODS_COUNT)/2);
++float  GOODS_W = (DEFAULT_W/GOODS_COUNT);
++static std::vector<SocketClient*> clientsVector;
++static std::mutex mtx_lock;
++bool isView = false;
++int view_count = 0;
++float process_delta = 0;
++uint32_t loop = 0;
++int ad_id = 30;
++float BASE_W = 0;
++#define GROSS_W (DEFAULT_W -weight - BASE_W)
++//TODO: add lock for client send
++static int send_adid_to_client(SocketClient* client, const string ad){
++
++    cout<<__FUNCTION__<<":"<<ad<<endl;
++    if (client == nullptr){
++        cout<<__FUNCTION__<<": null client, skip"<<endl;
++        return 0;
++    }
++
++    string key = "advertise";
++    vector<string> ads;
++    ads.push_back(ad);
++    client->send_simple(key, ad);
++    return 0;
++}
++
++static int send_adid_to_allclients(const string& ad)
++{
++    std::vector<SocketClient*> clients;
++    {
++        lock_guard<mutex> l(mtx_lock);
++        clients = clientsVector;
++    }
++    for (auto& c:clients) {
++        send_adid_to_client(c, ad);
++    }
++}
++
++//get socket client instance by client's mac
++static SocketClient* getClientByMac(const string& mac) {
++    lock_guard<mutex> l(mtx_lock);
++
++    for (auto& c:clientsVector) {
++        const string& clientMac = c->getMac();
++        cout<<__FUNCTION__<<"clientMac="<<clientMac<<", mac="<<mac<<endl;
++        if (mac.find(clientMac) != string::npos){
++            cout<<__FUNCTION__<<"found existing client with mac : "<< mac<<endl;
++            return c;
++        }
++    }
++    return nullptr;
++}
++
++static int send_adid_to_client_bymac(const string mac, const string ad){
++    cout<<__FUNCTION__<<__LINE__<<endl;
++    SocketClient* client = getClientByMac(mac);
++    cout<<__FUNCTION__<<__LINE__<<endl;
++    send_adid_to_client(client, ad);
++    cout<<__FUNCTION__<<__LINE__<<endl;
++    return 0;
++}
++
++static void forward(string key, vector<string> messages, SocketClient *exception){
++	std::string *_uid = (std::string*) exception->getTag();
++	for(auto x : clientsVector){
++		std::string *uid = (std::string*) x->getTag();
++		if((*uid)!=(*_uid)){
++			x->send(key, messages);
++		}
++	}
++}
++
++static void onMessage_register(SocketClient *socket, string message){
++    cout<<"server receive client message: register " <<endl;
++    if (message.size() <= 0){
++        cout<<"Invalid messages size"<<endl;
++        return;
++    }
++    transform(message.begin(), message.end(), message.begin(), ::tolower);
++    socket->setMac(message);
++    cout<<"->"<<socket<<" : " << *(string*)socket->getTag() << " : " <<message<<endl;
++}
++
++static void onMessage(SocketClient *socket, string message){
++    cout<<"server receive client message" <<message<<endl;
++}
++
++static void onDisconnect(SocketClient *socket){
++	cout << "client disconnected !" << endl;
++	//forward("message", {"Client disconnected"}, socket);
++	std::string *_uid = (std::string*) socket->getTag();
++    lock_guard<mutex> l(mtx_lock);
++	for(int i=0 ; i<clientsVector.size() ; i++){
++		std::string *uid = (std::string*) clientsVector[i]->getTag();
++		if((*uid)==(*_uid)){
++			clientsVector.erase(clientsVector.begin() + i);
++            cout<<"OnDisconnect handle client: " << *_uid <<endl;
++            break; //should not continue the loop, with erase ops
++		}
++	}
++	delete socket;
++}
++
++static void freeMemory(){
++	for(auto x : clientsVector){
++		delete (std::string*) x->getTag();
++		delete x;
++	}
++}
++int startWeightServer() {
++	srand(time(NULL));
++    uint32_t length = 100;
++    char buf[length];
++    memset(buf, 0, length);
++#ifdef USE_UNIX_DOMAIN
++    //use unix domain socket
++	SocketServer server;
++    cout<<"server use unix domain socket " << UNIX_DOMAIN_SOCKET_NAME<<endl;
++#else
++    //use inter domain socket
++	SocketServer server(7112);
++    cout<<"server use inter domain socket "<< SOCKET_IP_ADDR << " : 7112"  << endl;
++#endif
++
++	if(server.start()){
++		while (1) {
++			int sock = server.accept();
++			if(sock!=-1){
++				cout << "weight client connected !" << endl;
++                while(1) {
++                    int len = ::recv(sock, buf, length, 0);
++                    cout<<"weight sensor buf ="<<buf<<endl;
++                    char* pos = NULL;
++                    pos = strchr(buf, ',');
++                    if (pos != NULL) {
++                        char* pos2 = NULL;
++                        pos2 = strchr(buf, ':');
++                        if (pos2 != NULL) {
++                            char tmp1[100];
++                            memset(tmp1, 0, 100);
++                            int id_len = pos - pos2;
++                            id_len = id_len - 1;
++                            memcpy(tmp1, pos2 + 1, id_len);
++                            int id = atoi(tmp1);
++                            cout<< "sensor id ="<<id<<endl;
++                            pos2 = strchr(pos+1, ':');
++                            if (pos2 != NULL) {
++                                float weight = atof(pos2+1);
++                                cout<< "weight ="<<weight<<endl;
++                                if (isView == true) {
++                                    loop++;
++                                }
++
++                                if (loop > 100) {
++                                    cout<<"warning the goods lost!!!!!!!!!!!"<<endl;
++                                }
++
++                                if ((GROSS_W > GOODS_HALF) && !isView) {
++                                    isView = true;
++                                    view_count++;
++                                    cout<<"view++"<<endl;
++                                    process_delta = GROSS_W;
++                                    send_adid_to_allclients(to_string(ad_id));
++                                    continue;
++                                }
++                                if (isView) {
++                                    if (GROSS_W < GOODS_HALF) {
++                                        cout<<"isView = false"<<endl;
++                                        isView = false;
++                                        loop = 0;
++                                    }
++
++                                    if (GROSS_W > (process_delta + GOODS_HALF)) {
++                                        process_delta = GROSS_W;
++                                        view_count++;
++                                        cout<<"isView = true"<<endl;
++                                        send_adid_to_allclients(to_string(ad_id));
++                                    }
++
++                                }
++
++                                cout<<"view count = "<<view_count<<endl;
++                            }
++                        }
++                    }
++                }
++			}
++		}
++	}
++	else{
++        perror("start server error");
++		cout << "fail to start weight server" << endl;
++	}
++
++    //in most case, will not enter.
++	freeMemory();
++    return 0;
++
++}
++int startAdServer() {
++	srand(time(NULL));
++
++#ifdef USE_UNIX_DOMAIN
++    //use unix domain socket
++	SocketServer server;
++    cout<<"server use unix domain socket " << UNIX_DOMAIN_SOCKET_NAME<<endl;
++#else
++    //use inter domain socket
++	SocketServer server(8113);
++    cout<<"server use inter domain socket "<< SOCKET_IP_ADDR << " : 8113" << endl;
++#endif
++
++	if(server.start()){
++		while (1) {
++			int sock = server.accept();
++			if(sock!=-1){
++				cout << "client connected !" << endl;
++				SocketClient *client = new SocketClient(sock);
++				client->addListener("message", onMessage);
++				client->addListener("register", onMessage_register);
++
++				client->setDisconnectListener(onDisconnect);
++				client->setTag(new std::string(getUid()));
++				clientsVector.push_back(client);
++			}
++		}
++	}
++	else{
++        perror("start server error");
++		cout << "fail to start ad server 8113" << endl;
++	}
++
++    //in most case, will not enter.
++	freeMemory();
++    return 0;
++}
++
++static int stopServer()//TODO
++{
++    return 0;
++}
++
++#ifdef DebugMain
++int main(int argc , char *argv[]){
++    thread t = thread([](){
++        startServer();
++    });
++
++
++    std::string line;
++    while(1){
++        /*
++        cout << "input advertise id: ";
++        getline(cin, line);
++        send_adid_to_allclients(line);
++        */
++        usleep(1000*100*1);
++        //send_adid_to_allclients("test.mp4");
++    }
++
++    stopServer();
++    t.join();
++
++	return 0;
++}
++#endif
++
+diff --git a/weightServer.h b/weightServer.h
+new file mode 100644
+index 0000000..cbd2b58
+--- /dev/null
++++ b/weightServer.h
+@@ -0,0 +1,12 @@
++#ifndef WEIGHT_SERVER_H
++#define WEIGHT_SERVER_H
++
++
++#include "Tools.h"
++#include "lib/SocketClient.h"
++#include "lib/SocketServer.h"
++
++int startAdServer();
++int startWeightServer();
++
++#endif
+-- 
+1.8.3.1
+
