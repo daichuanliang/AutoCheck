@@ -90,6 +90,7 @@ void saveMac(int fd, char *recvData);
 void saveFd(int fd, char *recv_data);
 int readDataFromMySQL(MYSQL *conn);
 
+MYSQL *conn;
 int main(int argc ,char *argv[])
 {
 
@@ -98,9 +99,8 @@ int main(int argc ,char *argv[])
     pthread_t thrWeightId, thrAdId;
     //open MySQL
 
-    MYSQL *conn;
     conn = mysql_init(NULL);
-    connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
+    connectDatabase(conn, "localhost", "root", "aim_123456", "shopdb");
     readDataFromMySQL(conn);
 
 #if 1
@@ -140,6 +140,7 @@ static void *thrAdServer(void *)
     //before bind(),set the attr of structure sockaddr.
     memset(&s_addr_in, 0, sizeof(s_addr_in));
     s_addr_in.sin_family = AF_INET;
+    //s_addr_in.sin_addr.s_addr=inet_addr("192.168.0.100");
     s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
     s_addr_in.sin_port = htons(AD_CLIENT_PORT);
 
@@ -215,6 +216,7 @@ static void *thrWeightServer(void *)
     //before bind(),set the attr of structure sockaddr.
     memset(&s_addr_in, 0, sizeof(s_addr_in));
     s_addr_in.sin_family = AF_INET;
+    //s_addr_in.sin_addr.s_addr=inet_addr("192.168.0.100");
     s_addr_in.sin_addr.s_addr = htonl(INADDR_ANY);
     s_addr_in.sin_port = htons(WEIGHT_PORT);
     
@@ -276,11 +278,33 @@ void send2AdClient(char *adMac, int adId)
     char tmp_id[20];
     memset(tmp_id, 0, sizeof(tmp_id));
     sprintf(tmp_id, "%d", adId); 
-    cout << "send AD ID:" << tmp_id << "to Ad Client..." <<endl;
+    cout << "send AD ID:" << tmp_id << " to Ad Client mac:" << adMac << endl;
+    const char *data_send = "advertise";
+    uint32_t length1 = strlen(data_send);
+    uint32_t length2 = strlen(tmp_id);
+    
+        
     for(int i=0; i<NUM_OF_CLIENTS; i++)
     {
         if(strcmp(adClient[i].mac, adMac) == 0)
         {
+            cout << "hahahahhahahahh fd:" << adClient[i].sockfd << endl;
+            //send lenght,then send "advertise"
+            if((send(adClient[i].sockfd, &length1, sizeof(length1), 0)) < 0)
+            {
+                LOG(ERROR) << "send adId error..";
+            }
+
+            if((send(adClient[i].sockfd, data_send, strlen(data_send), 0)) < 0)
+            {
+                LOG(ERROR) << "send adId error..";
+            }
+
+            if((send(adClient[i].sockfd, &length2, sizeof(length2), 0)) < 0)
+            {
+                LOG(ERROR) << "send adId error..";
+            }
+
             if((send(adClient[i].sockfd, tmp_id, strlen(tmp_id), 0)) < 0)
             {
                 LOG(ERROR) << "send adId error..";
@@ -296,13 +320,21 @@ static void *funThrAdRecvHandler(void *sock_fd)
     int fd = *((int *)sock_fd);
     int i_recvBytes;
     char data_recv[BUFFER_LENGTH];
-
     while(1){
         LOG(INFO) << "recv AD client data...";
         memset(data_recv, 0, BUFFER_LENGTH);
-
-        i_recvBytes = recv(fd, data_recv, BUFFER_LENGTH, 0);
-        printf("recv data:%s\n", data_recv);
+        i_recvBytes = 0;
+        uint32_t length = 0;
+        i_recvBytes = recv(fd, &length, sizeof(length), 0);
+        //i_recvBytes = recv(fd, &length, sizeof(length), MSG_WAITALL);
+        if(i_recvBytes!=-1 && i_recvBytes!=0)
+            length = ntohl(length);
+        cout << "fd: " << fd <<" recv bytes:" <<i_recvBytes << "   recv data length: " << length << endl;
+        if((length%BUFFER_LENGTH) != 0)
+        {
+            i_recvBytes = recv(fd, data_recv, BUFFER_LENGTH, 0);
+        }
+        cout << "fd: " << fd <<" recv bytes:" <<i_recvBytes << "   recv data 2: " << data_recv << endl;
         if(i_recvBytes == 0)
         {
             LOG(INFO) << "Client has closed!";
@@ -319,7 +351,7 @@ static void *funThrAdRecvHandler(void *sock_fd)
         {
             saveFd(fd, data_recv);
         }
-        if(strstr(data_recv, "mac") != NULL)
+        if(strstr(data_recv, ":") != NULL)
         {
             saveMac(fd, data_recv);
         }
@@ -361,7 +393,9 @@ void saveMac(int fd, char *recvData)
 {
     char mac[20];
     memset(mac, 0 ,sizeof(mac));
-    cutStringSaveinArray(mac, recvData, "mac:", "\0", 20);
+    //cutStringSaveinArray(mac, recvData, "mac:", "\0", 20);
+    strncpy(mac, recvData, 17);
+    cout << "savceMac fd:" << fd << "  mac:" << mac << endl;
     for(int i=0; i<NUM_OF_CLIENTS; i++)
     {
         if(adClient[i].sockfd == fd)
@@ -475,7 +509,7 @@ void sensorData(int fd, char *recvData)
 
     cutStringSaveinArray(tmp_id, recvData, "id:", ",", 20);
     printf("id: %s\n", tmp_id);
-    cutStringSaveinArray(tmp_weights, recvData, "weights:", "\0", 20);
+    cutStringSaveinArray(tmp_weights, recvData, "weight:", "\0", 20);
     printf("weight: %s\n", tmp_weights);
 
     int sensor_id = atoi(tmp_id);
@@ -483,9 +517,12 @@ void sensorData(int fd, char *recvData)
     printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
     //read data from MySQL
     //connect Database
+#if 0
     MYSQL *conn;
     conn = mysql_init(NULL);
     connectDatabase(conn, "localhost", "root", "cldai-gpu123--", "shopdb");
+#endif
+
 #if 0
     //products table: ad_id,ad_mac
 
@@ -530,6 +567,7 @@ void sensorData(int fd, char *recvData)
         {
             if(product[i].isInit == 0 && product[i].id == sensor_id)
             {
+                cout << "cldai test 111111111" <<endl;
                 product[i].sockfd = fd;
                 //product[i].id = sensor_id;
                 product[i].weights = weights;            
@@ -545,6 +583,7 @@ void sensorData(int fd, char *recvData)
         if(product[j].isView == 0)
         {
             //在误差范围内
+            cout << "cldai test 22222" <<endl;
             cout << "ready to send data to AD Client..." << endl;
             cout << "weights:" << weights << "   abs(weights):" << abs(weights) << "    goodsErr: " << product[j].goodsErr <<endl;
             if((weights < 0) && (abs(weights) > product[j].goodsErr))
@@ -562,7 +601,7 @@ void sensorData(int fd, char *recvData)
                 updateDatabase(conn, sql);
                                 
 #if 1
-                cout << "AD ID:"<< product[j].adId <<"mac:" << product[j].mac << endl;
+                cout << "AD ID:"<< product[j].adId <<"   mac:" << product[j].mac << endl;
 #endif
                 send2AdClient(product[j].mac, product[j].adId);
 
@@ -570,6 +609,7 @@ void sensorData(int fd, char *recvData)
         }   
         else
         {
+                cout << "cldai test 33333333333" <<endl;
             if((weights < 0) && (abs(weights) > product[j].goodsErr))
             {
                 //商品长时间未放置回原处
@@ -610,7 +650,7 @@ void sensorData(int fd, char *recvData)
 
 
 #endif    
-	mysql_close(conn);
+	//mysql_close(conn);
 
 
 }

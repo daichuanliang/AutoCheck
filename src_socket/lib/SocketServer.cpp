@@ -25,12 +25,12 @@ SocketServer::SocketServer(){
 bool SocketServer::start(){
     if (bUnixDomain){
         m_socket = ::socket(AF_UNIX , SOCK_STREAM , 0);
+        int on = 1; 
+        int ret = setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on) ); 
 
         if(m_socket!=-1){
             //if(::bind(m_socket,(struct sockaddr *)&m_unserver , sizeof(m_unserver)) >= 0){
             /* Enable address reuse */ 
-            int on = 1; 
-            int ret = setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on) ); 
 
             int len = offsetof(struct sockaddr_un, sun_path) + strlen("ipc_socket");
             if(::bind(m_socket,(struct sockaddr *)&m_unserver , len) >= 0){
@@ -45,6 +45,8 @@ bool SocketServer::start(){
     }
     else{
         m_socket = ::socket(AF_INET , SOCK_STREAM , 0);
+        int on = 1; 
+        int ret = setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on) ); 
 
         if(m_socket!=-1){
             if(::bind(m_socket,(struct sockaddr *)&m_server , sizeof(m_server)) >= 0){

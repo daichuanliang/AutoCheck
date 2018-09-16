@@ -23,7 +23,7 @@
 #endif
 
 
-#define TIMEOUT_TIME 2000
+#define TIMEOUT_TIME 20
 #define WEIGHT_PORT 7112
 #define AD_CLIENT_PORT 8113
 #define BUFFER_LENGTH 1024
@@ -33,7 +33,7 @@
 #define NUM_OF_CLIENTS 512
 #define SQLLEN 256
 
-#define LOST_WARNING_INTERATION 30
+#define LOST_WARNING_INTERATION 20
 
 using namespace std;
 float DEFAULT_W = 955;
@@ -67,6 +67,7 @@ typedef struct productInfo{
     char mac[20]; //TODO: Change 1 mac to Multiple macs.
     float goodsErr; //weight error range
     int storeId;
+    int sendStatusToWeb;
 }_productInfo;
 
 struct productInfo product[NUM_OF_SENSORS];
@@ -358,7 +359,7 @@ int startWeightServer() {
 						LOG(INFO) << "Client has closed!";
 						cout << "Client has closed!" << endl;
 						resetProductStatus(sock);
-						break;
+						//break;
 					}
 					//data from sensor
 					if(strstr(buf, "id:") !=NULL)
@@ -524,7 +525,7 @@ int readDataFromMySQL(MYSQL *conn)
 {
     char sql[SQLLEN];
     memset(sql, 0, sizeof(sql));
-    sprintf(sql, "select ad_id,mac,sensor_id,quantity,weight,ave_weight,product_id, layers.store_id from layers,products where layers.product_id = products.id");
+    sprintf(sql, "select ad_id,mac,sensor_id,quantity,weight,ave_weight,product_id, layers.store_id, is_lost from layers,products where layers.product_id = products.id");
     queryDatabase(conn, sql); 
     MYSQL_RES *result = mysql_store_result(conn);
     if(result == NULL)
@@ -558,6 +559,8 @@ int readDataFromMySQL(MYSQL *conn)
         //product[i].productId = atoi(row[])
         if(row[7] != NULL)
             product[i].storeId = atoi(row[7]);
+        if(row[8] != NULL)
+            product[i].lost = atoi(row[8]);
         cout << "aveWeight:" << product[i].aveWeight <<endl;
         cout << "goodsErr:" << product[i].goodsErr <<endl;
         cout << "storeId:" << product[i].storeId <<endl;
@@ -576,6 +579,12 @@ void resetProductStatus(int fd)
         {
             product[i].isView = 0;
             //TODO: sockfd = 0 ?
+            product[i].loop = 0;
+            product[i].lost = 0;
+            string json = "{\"store_id\":" + to_string(product[i].storeId) + ",\"sensor_id\":" + to_string(product[i].id) + ",\"is_lost\":"+ to_string(0) + "}";
+            cout << "Post data:" << json << endl;
+            string output;
+            curlPostJson(json, url_lost_control, server_port, output);
             break;
         }
     }
@@ -597,7 +606,6 @@ void sensorData(int fd, char *recvData)
 
     int sensor_id = atoi(tmp_id);
     float weights = atof(tmp_weights);
-    //printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
     //read data from MySQL
     //connect Database
 #if 0
@@ -641,7 +649,6 @@ void sensorData(int fd, char *recvData)
             break;
         }
     }
-    //cout << "j:" << j <<endl;
     if(j >= NUM_OF_SENSORS)
     {
         //Initialize the product
@@ -685,8 +692,10 @@ void sensorData(int fd, char *recvData)
                 sprintf(sql, "update products set view_count=%d where id in(select product_id from layers where sensor_id=%d)", product[j].count, product[j].id);
                 updateDatabase(conn, sql);
                 #endif
-                string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"}";
-                cout << "Post data:" << json << endl;
+                string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "}";
+                string json2 = "{\"store_id\":1, \"sensor_id\":1}";
+                cout <<endl << "Post data:" << json << endl;
+                cout << "Post data2:" << json2 << endl;
                 string output;
                 curlPostJson(json, url_view_control, server_port, output);
                                 
@@ -696,7 +705,7 @@ void sensorData(int fd, char *recvData)
                 //send2AdClient(product[j].mac, product[j].adId);
 				string mac = product[j].mac;
 				transform(mac.begin(), mac.end(), mac.begin(), ::tolower);
-				send_adid_to_client_bymac(product[j].mac, to_string(product[j].adId));
+				send_adid_to_client_bymac(mac, to_string(product[j].adId));
 
             }
         }   
@@ -708,23 +717,24 @@ void sensorData(int fd, char *recvData)
                 //商品长时间未放置回原处
 				cout << "The goods don't put back to its original place..." <<endl;
                 product[j].loop += 1;
-                return ;
+                //return ;
             }
-			else if((weights < 0) && (abs(weights) < product[j].goodsErr))
+			//else if((weights < 0) && (abs(weights) < product[j].goodsErr))
+			else if((abs(weights) < product[j].goodsErr))
 			{
 				//商品放回原处，但上报重量有误差
 				cout << "goods has been put back to its original place...." << endl;
+                //product[j].lost = 0;
+                //product[j].loop = 0;
 				resetProductStatus(fd);
 			}
         }
     }
     
-    
     //商品丢失
     if(product[j].loop > LOST_WARNING_INTERATION)
     {
-        printf("warning: the goods lost!!!");
-        product[j].lost = 1;
+        printf("warning: the goods lost!!!\n");
         //update MySQL
 #if 0
         char sql[SQLLEN];
@@ -732,19 +742,22 @@ void sensorData(int fd, char *recvData)
         sprintf(sql, "update products set is_lost=1 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
         updateDatabase(conn, sql);
 #endif
-                string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"is_lost\":"+ to_string(1) + "\"}";
-                cout << "Post data:" << json << endl;
-                string output;
-                curlPostJson(json, url_view_control, server_port, output);
+        if(product[j].lost == 0)
+        {
+            string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + ",\"is_lost\":"+ to_string(1) + "}";
+            cout << "Post data:" << json << endl;
+            string output;
+            curlPostJson(json, url_lost_control, server_port, output);
+            product[j].lost = 1;
+        }
 
     }
 
 
     //补货后，重置丢失状态
-    if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].loop > LOST_WARNING_INTERATION))
+    //if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].loop > LOST_WARNING_INTERATION))
+    if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].lost == 1))
     {
-        product[j].lost = 0;
-        product[j].loop = 0;
         //updata MySQL
 #if 0
         char sql[SQLLEN];
@@ -752,10 +765,12 @@ void sensorData(int fd, char *recvData)
         sprintf(sql, "update products set is_lost=0 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
         updateDatabase(conn, sql);                                
 #endif
-        string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"is_lost\":"+ to_string(0) + "\"}";
+        string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + ",\"is_lost\":"+ to_string(0) + "}";
         cout << "Post data:" << json << endl;
         string output;
-        curlPostJson(json, url_view_control, server_port, output);
+        curlPostJson(json, url_lost_control, server_port, output);
+        product[j].lost = 0;
+        product[j].loop = 0;
 
     }
 
