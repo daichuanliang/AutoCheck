@@ -15,13 +15,6 @@
 #include "Tools.h"
 #include "lib/SocketClient.h"
 #include "lib/SocketServer.h"
-#include "weightServer.h"
-
-#ifdef ENABLE_JSON_POST
-//#include "jsonAPI.h"
-#include "curlPost.h"
-#endif
-
 
 #define TIMEOUT_TIME 2000
 #define WEIGHT_PORT 7112
@@ -33,7 +26,6 @@
 #define NUM_OF_CLIENTS 512
 #define SQLLEN 256
 
-#define LOST_WARNING_INTERATION 30
 
 using namespace std;
 float DEFAULT_W = 955;
@@ -66,7 +58,7 @@ typedef struct productInfo{
     float aveWeight;
     char mac[20]; //TODO: Change 1 mac to Multiple macs.
     float goodsErr; //weight error range
-    int storeId;
+
 }_productInfo;
 
 struct productInfo product[NUM_OF_SENSORS];
@@ -77,7 +69,7 @@ char* cutStringSaveinArray(char* f_dest,char* f_source, const char* f_start,cons
 void sensorData(int fd, char *recvData);
 int readDataFromMySQL(MYSQL *conn);
 static int setTimeout(int fd);
-int startWeightWebServer();
+
 
 static int send_adid_to_client(SocketClient* client, const string ad){
 
@@ -196,135 +188,6 @@ static int setTimeout(int fd){
 	return 0;
 }
 
-int startWeightWebServer() {
-	srand(time(NULL));
-    uint32_t length = 100;
-    char buf[length];
-    memset(buf, 0, length);
-#ifdef USE_UNIX_DOMAIN
-    //use unix domain socket
-	SocketServer server;
-    cout<<"server use unix domain socket " << UNIX_DOMAIN_SOCKET_NAME<<endl;
-#else
-    //use inter domain socket
-	SocketServer server(8118);
-    cout<<"server use inter domain socket "<< SOCKET_IP_ADDR << " : 8118"  << endl;
-#endif
-
-	if(server.start()){
-		while (1) {
-			int sock = server.accept();
-			if(sock!=-1){                
-                memset(buf, 0, length);
-				cout << "weight Web connected !" << endl;
-				int len = ::recv(sock, buf, length, 0);
-                 cout<<"weight Web send data ="<<buf<<endl;
-				if(strstr(buf, "InitDone") != NULL)
-				{
-					//clear productInfo
-					for(int i=0; i<NUM_OF_SENSORS; i++)
-					{
-						product[i].adId = 0;
-						memset(product[i].mac, 0, sizeof(product[i].mac));
-						product[i].id = 0;
-						product[i].quantity = 0;
-						product[i].weights = 0;
-						product[i].aveWeight = 0;
-						product[i].goodsErr = 0;
-					}
-					//Init data from MySQL
-					string status = "OK";
-					#if 1
-					int sts=readDataFromMySQL(conn);
-					if (sts<0){
-						status = "Fail";
-					}
-					else{
-						status = "OK";
-					}
-					#endif
-					//send OK to Weight Web
-					if(send(sock, status.c_str(), status.size(), 0) < 0){
-						cout << "send data to Weights Web error!!!!" << endl;
-					}
-					//mysql_close(conn);
-					
-				}
-				else if(strstr(buf, "store_id:") != NULL)
-				{
-					cout << "init Web data" << endl;
-					//TODO
-					initWebData(buf, sock);
-				}
-				
-			}
-		}
-	}
-	
-}
-
-void initWebData(char *recvData, int fd) 
-{
-    cout << "recvData from Web:" << recvData <<endl;
-    char store_id[10];
-    char sensor_id[10];
-    memset(store_id, 0, sizeof(store_id));
-    memset(sensor_id, 0, sizeof(sensor_id));
-    cutStringSaveinArray(store_id, recvData, "store_id:", ",", 10);
-    cutStringSaveinArray(sensor_id, recvData, "sensor_id:", "\0", 10);
-
-    cout << "store_id:" << store_id << "   sensor_id:" <<sensor_id << endl;
-    string sendData;
-    char tmp[BUFFER_LENGTH*10];
-    int i = 0;
-    int j = 0;
-    memset(tmp, 0, sizeof(tmp));
-    if(atoi(sensor_id) != 0)
-    {
-        for(i=0; i<NUM_OF_SENSORS; i++)
-        {
-            if((product[i].id == atoi(sensor_id)) && (product[i].storeId == atoi(store_id)))
-            {
-                sprintf(tmp, "[{\"store_id\":%s, \"sensor_id\":%s, \"weight\":%f}]", store_id, sensor_id, product[i].weights);
-                cout << "tmp:" << tmp <<endl;
-                sendData = tmp; 
-                break;
-            }
-        }
-    }
-    else
-    {
-        char tmp_head[10];
-        char tmp_data[BUFFER_LENGTH*10];
-        memset(tmp_head, 0, sizeof(tmp_head));
-        memset(tmp_data, 0, sizeof(tmp_data));
-        sprintf(tmp_head, "[");
-
-        for(j=0; j<NUM_OF_SENSORS; j++)
-        {
-            if(product[j].storeId == atoi(store_id))
-            {
-                sprintf(tmp_data, "%s{\"store_id\":%s, \"sensor_id\":%d, \"weight\":%f},", tmp_data, store_id, product[j].id, product[j].weights); 
-            }
-        }
-        cout << "tmp_data:" <<tmp_data<<endl;
-        sprintf(tmp, "%s%s]", tmp_head, tmp_data);
-        sendData = tmp; 
-        sendData.erase(sendData.end() - 2);
-        cout << "send data to Web 111:" << sendData << endl;
-    }
-    cout << "i:" << endl;
-    if(i>=NUM_OF_SENSORS)
-    {
-        sendData = "InitFailed";
-    }
-    cout << "send data to Web:" << sendData << endl;
-	if(send(fd, sendData.c_str(), sendData.size(), 0) < 0){
-		cout << "send data to Weights Web error!!!!" << endl;
-	}
-
-}
-
 
 int startWeightServer() {
 	srand(time(NULL));
@@ -346,7 +209,7 @@ int startWeightServer() {
 			int sock = server.accept();
 			int sts = setTimeout(sock);
 			if(sts < 0){
-				resetProductStatus(sock);
+				;
 			}
 			if(sock!=-1){
 				cout << "weight client connected !" << endl;
@@ -447,6 +310,8 @@ int startAdServer() {
 	if(server.start()){
 		while (1) {
 			int sock = server.accept();
+            int opt = 1;
+            setsockopt( sock, SOL_SOCKET,SO_REUSEADDR, (const void *)&opt, sizeof(opt) );
 			if(sock!=-1){
 				cout << "client connected !" << endl;
 				SocketClient *client = new SocketClient(sock);
@@ -494,9 +359,6 @@ int main(int argc , char *argv[]){
     thread ta = thread([](){
         startAdServer();
     });
-	thread tww = thread([](){
-        startWeightWebServer();
-    });
 
 
     std::string line;
@@ -514,7 +376,6 @@ int main(int argc , char *argv[]){
    // t.join();
     tw.join();
     ta.join();
-	tww.join();
 	mysql_close(conn);
 	return 0;
 }
@@ -522,9 +383,10 @@ int main(int argc , char *argv[]){
 
 int readDataFromMySQL(MYSQL *conn)
 {
+
     char sql[SQLLEN];
     memset(sql, 0, sizeof(sql));
-    sprintf(sql, "select ad_id,mac,sensor_id,quantity,weight,ave_weight,product_id, layers.store_id from layers,products where layers.product_id = products.id");
+    sprintf(sql, "select ad_id,mac,sensor_id,quantity,weight,ave_weight,product_id from layers,products where layers.product_id = products.id");
     queryDatabase(conn, sql); 
     MYSQL_RES *result = mysql_store_result(conn);
     if(result == NULL)
@@ -532,38 +394,26 @@ int readDataFromMySQL(MYSQL *conn)
         finishWithError(conn);
         return -1;
     }
-
-    //int num_fields = mysql_num_fields(result);
+    int num_fields = mysql_num_fields(result);
     MYSQL_ROW row;
     int i=0;
     while ((row = mysql_fetch_row(result)))
     {
         //TODO: 赋值
-        if(row[0] != NULL)
-            product[i].adId = atoi(row[0]);
+        product[i].adId = atoi(row[0]);
         memset(product[i].mac, 0, sizeof(product[i].mac));
-        if(row[1] != NULL)
-            strcpy(product[i].mac, row[1]);
-        if(row[2] != NULL)
-            product[i].id = atoi(row[2]);
-        if(row[3] != NULL)
-            product[i].quantity = atoi(row[3]);
-        if(row[4] != NULL)
-            product[i].weights = atof(row[4]);
-        if(row[5] != NULL)
-        {
-            product[i].aveWeight = atof(row[5]);
-            product[i].goodsErr = product[i].aveWeight/3;
-        }
+        strcpy(product[i].mac, row[1]);
+        product[i].id = atoi(row[2]);
+        product[i].quantity = atoi(row[3]);
+        product[i].weights = atof(row[4]);
+        product[i].aveWeight = atof(row[5]);
+        product[i].goodsErr = product[i].aveWeight/3;
         //product[i].productId = atoi(row[])
-        if(row[7] != NULL)
-            product[i].storeId = atoi(row[7]);
         cout << "aveWeight:" << product[i].aveWeight <<endl;
         cout << "goodsErr:" << product[i].goodsErr <<endl;
-        cout << "storeId:" << product[i].storeId <<endl;
         i++;            
     }
-    //mysql_close(conn);
+    mysql_close(conn);
     return 0;
 
 }
@@ -584,20 +434,20 @@ void resetProductStatus(int fd)
 
 void sensorData(int fd, char *recvData) 
 {
-    //LOG(INFO) << "Receive data:" << recv; 
+    LOG(INFO) << "Receive data:" << recv; 
     char tmp_id[20];
     char tmp_weights[20];
     memset(tmp_id, 0, sizeof(tmp_id));
     memset(tmp_weights, 0, sizeof(tmp_weights));
 
     cutStringSaveinArray(tmp_id, recvData, "id:", ",", 20);
-    //printf("id: %s\n", tmp_id);
+    printf("id: %s\n", tmp_id);
     cutStringSaveinArray(tmp_weights, recvData, "weight:", "\0", 20);
-    //printf("weight: %s\n", tmp_weights);
+    printf("weight: %s\n", tmp_weights);
 
     int sensor_id = atoi(tmp_id);
     float weights = atof(tmp_weights);
-    //printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
+    printf("cldai test sensor_id=%d, weights=%f\n", sensor_id, weights);
     //read data from MySQL
     //connect Database
 #if 0
@@ -619,7 +469,7 @@ void sensorData(int fd, char *recvData)
         finishWithError(conn);
     }
     int num_fields = mysql_num_fields(result);
-    MYSQL_ROW row;
+    MYSQL_ROW rew;
 
     while ((row = mysql_fetch_row(result)))
     {
@@ -636,20 +486,21 @@ void sensorData(int fd, char *recvData)
     int j=0;
     for(j=0; j<NUM_OF_SENSORS; j++)
     {
-        if(product[j].id == sensor_id && product[j].weights != 0)
+        if(product[j].id == sensor_id)
         {
             break;
         }
     }
-    //cout << "j:" << j <<endl;
+    cout << "j:" << j <<endl;
     if(j >= NUM_OF_SENSORS)
     {
         //Initialize the product
+        cout << "Initialize the product" << endl;
         for(int i=0; i<NUM_OF_SENSORS; i++)
         {
             if(product[i].isInit == 0 && product[i].id == sensor_id)
             {
-				cout << "Initialize the product" << endl;
+                cout << "cldai test 111111111" <<endl;
                 product[i].sockfd = fd;
                 //product[i].id = sensor_id;
                 product[i].weights = weights;            
@@ -665,13 +516,11 @@ void sensorData(int fd, char *recvData)
         if(product[j].isView == 0)
         {
             //在误差范围内
-            
-            
+            cout << "cldai test 22222" <<endl;
+            cout << "ready to send data to AD Client..." << endl;
+            cout << "weights:" << weights << "   abs(weights):" << abs(weights) << "    goodsErr: " << product[j].goodsErr <<endl;
             if((weights < 0) && (abs(weights) > product[j].goodsErr))
             {
-				cout << "browsing the goods... " <<endl;
-				cout << "ready to send data to AD Client..." << endl;
-				cout << "weights:" << weights << "   abs(weights):" << abs(weights) << "    goodsErr: " << product[j].goodsErr <<endl;
                 product[j].isView = 1;
                 product[j].count += 1;
                 product[j].sockfd = fd;
@@ -679,83 +528,69 @@ void sensorData(int fd, char *recvData)
                 //update MySQL, send AD ID to AD client.
                 //string sql = "update products set view_count=" + product[j].count + "where id in(select product_id from layers where sensor_id=" + product[j].id + ")";
                 //const char *sql = "update products set view_count=3 where id in(select product_id from layers where sensor_id=101)"
-                #if 0
                 char sql[SQLLEN];
                 memset(sql, 0, sizeof(sql));
                 sprintf(sql, "update products set view_count=%d where id in(select product_id from layers where sensor_id=%d)", product[j].count, product[j].id);
                 updateDatabase(conn, sql);
-                #endif
-                string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"}";
-                cout << "Post data:" << json << endl;
-                string output;
-                curlPostJson(json, url_view_control, server_port, output);
                                 
 #if 1
                 cout << "AD ID:"<< product[j].adId <<"   mac:" << product[j].mac << endl;
 #endif
                 //send2AdClient(product[j].mac, product[j].adId);
-				string mac = product[j].mac;
-				transform(mac.begin(), mac.end(), mac.begin(), ::tolower);
-				send_adid_to_client_bymac(product[j].mac, to_string(product[j].adId));
-
+				//send_adid_to_client_bymac(product[j].mac, to_string(product[j].adId));
+#if 1
+                string mac = product[j].mac;
+                transform(mac.begin(), mac.end(), mac.begin(), ::tolower);
+                cout << "cldai test mac 11111111111111111      " << mac << endl;
+				send_adid_to_client_bymac(mac, to_string(product[j].adId));
+#endif
             }
         }   
         else
         {
-            
             if((weights < 0) && (abs(weights) > product[j].goodsErr))
             {
                 //商品长时间未放置回原处
-				cout << "The goods don't put back to its original place..." <<endl;
+            cout << "cldai test 33333333333" <<endl;
                 product[j].loop += 1;
                 return ;
             }
-			else if((weights < 0) && (abs(weights) < product[j].goodsErr))
-			{
-				//商品放回原处，但上报重量有误差
-				cout << "goods has been put back to its original place...." << endl;
-				resetProductStatus(fd);
-			}
+#if 1
+            else if((weights < 0) && (abs(weights) < product[j].goodsErr))
+            {
+            cout << "cldai test 444444" <<endl;
+                //放回原处，重置状态
+                resetProductStatus(fd);
+            }
+#endif
         }
     }
     
     
     //商品丢失
-    if(product[j].loop > LOST_WARNING_INTERATION)
+    if(product[j].loop > 100)
     {
         printf("warning: the goods lost!!!");
         product[j].lost = 1;
         //update MySQL
-#if 0
         char sql[SQLLEN];
         memset(sql, 0, sizeof(sql));
         sprintf(sql, "update products set is_lost=1 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
-        updateDatabase(conn, sql);
-#endif
-                string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"is_lost\":"+ to_string(1) + "\"}";
-                cout << "Post data:" << json << endl;
-                string output;
-                curlPostJson(json, url_view_control, server_port, output);
+        updateDatabase(conn, sql);                                
 
     }
 
 
     //补货后，重置丢失状态
-    if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].loop > LOST_WARNING_INTERATION))
+    if((weights > 0) && (abs(weights) > product[j].goodsErr) && (product[j].loop > 100))
     {
         product[j].lost = 0;
         product[j].loop = 0;
         //updata MySQL
-#if 0
         char sql[SQLLEN];
         memset(sql, 0, sizeof(sql));
         sprintf(sql, "update products set is_lost=0 where id in(select product_id from layers where sensor_id=%d)", product[j].id);
         updateDatabase(conn, sql);                                
-#endif
-        string json = "{\"store_id\":" + to_string(product[j].storeId) + ",\"sensor_id\":" + to_string(product[j].id) + "\"is_lost\":"+ to_string(0) + "\"}";
-        cout << "Post data:" << json << endl;
-        string output;
-        curlPostJson(json, url_view_control, server_port, output);
 
     }
 

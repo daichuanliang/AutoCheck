@@ -1,9 +1,17 @@
+SOURCE =weightServer.cpp sql.c lib/*.cpp utils.cpp curlPost.cpp
+CXXFLAGS=-O2 -Wall -Wno-strict-aliasing -Wno-unused-variable
+LDFLAGS=-L/usr/lib64/mysql -lmysqlclient -lglog -lpthread -lcrypt
+INCPATHS=-I/usr/include/mysql -I ./ -Ilib/ -Icommon/
 
-CFLAGS=-O2 -I${SDLFLAGS} -pthread -lcrypt #-lboost_system
+LDFLAGS_JSON_CURL += -lcurl -DENABLE_JSON_POST
 
-all:
-	g++ weightServer.cpp -o server Tools.h -I ./ -I lib/ lib/*.cpp ./utils.cpp -lpthread -std=c++11  ${CFLAGS} -DDebugMain
-	g++ client.cpp -o client -I ./ -I lib/ lib/*.cpp ./utils.cpp -lpthread -std=c++11  ${CFLAGS} -DDebugMain
+LDFLAGS+=$(LDFLAGS_JSON_CURL) 
+EXE = ./weightServer
+
+$(EXE):$(SOURCE)
+	g++ -std=c++11 -g -o $(EXE) $(SOURCE) $(LDFLAGS) $(INCPATHS) 
+clean:
+	rm -rf weightServer
 
 #./server
 #./client

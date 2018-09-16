@@ -8,5 +8,6 @@
 
 int startAdServer();
 int startWeightServer();
+void initWebData(char *recvData, int fd);
 
 #endif

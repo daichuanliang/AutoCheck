@@ -27,8 +27,8 @@ int main(int argc , char *argv[])
     SocketClient client;
     cout<<"Client try connect to UNIX domain socket"<<endl;;
 #else
-    SocketClient client(SOCKET_IP_ADDR, SOCKET_PORT);
-    cout<<"Client try connect to "<<SOCKET_IP_ADDR<<":"<<SOCKET_PORT<<endl;
+    SocketClient client(SOCKET_IP_ADDR, 8113);
+    cout<<"Client try connect to "<<SOCKET_IP_ADDR<<":"<<8113<<endl;
 #endif
     client.setDisconnectListener(onDisconnect);
 
